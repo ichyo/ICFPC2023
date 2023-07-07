@@ -1,7 +1,10 @@
 mod geo;
 mod io;
 
+use std::time::Duration;
+
 use rand::prelude::*;
+use rayon::prelude::*;
 use thousands::Separable;
 
 type Point = (u32, u32);
@@ -69,6 +72,7 @@ fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
 
             assert!(x <= problem.room_width);
             assert!(y <= problem.room_height);
+            assert!(problem.within_stage(x, y, PLACEMENT_RADIUS));
 
             if placements
                 .iter()
@@ -85,14 +89,68 @@ fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
     placements
 }
 
+fn climbing(
+    problem: &io::Problem,
+    init: &[Point],
+    timeout: Duration,
+    early_stop: Duration,
+) -> Vec<Point> {
+    let mut rng = rand::thread_rng();
+
+    let mut placements = init.to_vec();
+    let mut score = compute_score(problem, &placements);
+
+    let start = std::time::Instant::now();
+    let mut last_update = start;
+    while start.elapsed() < timeout && last_update.elapsed() < early_stop {
+        let k = rng.gen_range(0..problem.musicians.len());
+
+        let current = placements[k];
+
+        let x = rng
+            .gen_range(current.0.saturating_sub(PLACEMENT_RADIUS)..=current.0 + PLACEMENT_RADIUS);
+        let y = rng
+            .gen_range(current.1.saturating_sub(PLACEMENT_RADIUS)..=current.1 + PLACEMENT_RADIUS);
+
+        if !problem.within_stage(x, y, PLACEMENT_RADIUS) {
+            continue;
+        }
+
+        if (0..problem.musicians.len())
+            .any(|j| j != k && within_or_equal((x, y), placements[j], PLACEMENT_RADIUS))
+        {
+            continue;
+        }
+
+        placements[k] = (x, y);
+
+        let new_score = compute_score(problem, &placements);
+        if new_score > score {
+            //eprintln!("{}s: {} -> {}", start.elapsed().as_secs(), score, new_score);
+            score = new_score;
+            last_update = std::time::Instant::now();
+        } else {
+            placements[k] = current;
+        }
+    }
+
+    placements
+}
+
 fn main() {
     let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
 
-    for id in 1..=MAX_PROBLEM_ID {
+    (1..=MAX_PROBLEM_ID).into_par_iter().for_each(|id| {
         let problem = io::read_problem(id);
         let m = problem.musicians.len();
         let a = problem.attendees.len();
-        if m * m * a > 2_000_000_000 {
+
+        if !vec![8, 12, 30, 29, 25, 26].contains(&id) {
+            return;
+        }
+
+        /*
+        if m * m * a > 10_000_000_000 {
             eprintln!(
                 "Skipping problem {}: too many combinations ({})",
                 id,
@@ -100,7 +158,9 @@ fn main() {
             );
             continue;
         }
+        */
 
+        /*
         eprintln!("# musicians: {}", problem.musicians.len());
         eprintln!("# attendees: {}", problem.attendees.len());
         eprintln!(
@@ -119,9 +179,35 @@ fn main() {
             100.0 * (problem.stage_width as f64 * problem.stage_height as f64)
                 / (problem.room_width as f64 * problem.room_height as f64)
         );
+        */
 
-        let placements = generate_random_placement(&problem);
+        let start = std::time::Instant::now();
+        let mut best_init = generate_random_placement(&problem);
+        let mut best_init_score = compute_score(&problem, &best_init);
+        while start.elapsed() < std::time::Duration::from_secs(60) {
+            let p = generate_random_placement(&problem);
+            let score = compute_score(&problem, &p);
+            if score > best_init_score {
+                best_init = p;
+                best_init_score = score;
+            }
+        }
+        let placements = best_init;
+
+        eprintln!(
+            "Start climbing {} from score {}",
+            id,
+            compute_score(&problem, &placements)
+        );
+        let placements = climbing(
+            &problem,
+            &placements,
+            Duration::from_secs(60 * 5 * 6),
+            Duration::from_secs(10 * 6),
+        );
         let score = compute_score(&problem, &placements);
+        eprintln!("Id: {} Score: {}", id, score);
+
         if score > 0 {
             eprintln!("Submitting problem {} with score {}", id, score);
             io::submit_placements(
@@ -135,5 +221,5 @@ fn main() {
             )
             .unwrap();
         }
-    }
+    })
 }

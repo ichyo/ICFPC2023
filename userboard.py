@@ -14,8 +14,11 @@ total = sum(results)
 
 results_with_id = [(i + 1, x) for (i, x) in enumerate(results)]
 
+cum = 0
+
 for i, x in sorted(results_with_id, key=lambda x: x[1], reverse=True):
-    print(i, x, x / total)
+    cum += x
+    print(i, x, x / total, cum / total)
 
 
 

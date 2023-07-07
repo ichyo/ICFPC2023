@@ -33,6 +33,27 @@ pub struct Problem {
     pub attendees: Vec<Attendee>,
 }
 
+impl Problem {
+    pub fn within_stage(&self, x: u32, y: u32, r: u32) -> bool {
+        x >= self.stage_left() + r
+            && x + r <= self.stage_right()
+            && y >= self.stage_bottom() + r
+            && y + r <= self.stage_top()
+    }
+    fn stage_left(&self) -> u32 {
+        self.stage_bottom_left.0
+    }
+    fn stage_right(&self) -> u32 {
+        self.stage_bottom_left.0 + self.stage_width
+    }
+    fn stage_bottom(&self) -> u32 {
+        self.stage_bottom_left.1
+    }
+    fn stage_top(&self) -> u32 {
+        self.stage_bottom_left.1 + self.stage_height
+    }
+}
+
 #[derive(Debug)]
 pub struct Attendee {
     pub x: u32,

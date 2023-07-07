@@ -1,7 +1,7 @@
 use std::fs::File;
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Debug)]
 struct ProblemJson {
@@ -23,6 +23,7 @@ struct AttendeeJson {
 
 #[derive(Debug)]
 pub struct Problem {
+    pub id: u32,
     pub room_width: u32,
     pub room_height: u32,
     pub stage_width: u32,
@@ -60,6 +61,7 @@ fn try_read_problem(id: u32) -> Result<Problem> {
     let file = File::open(path)?;
     let problem_json: ProblemJson = serde_json::from_reader(file)?;
     let problem = Problem {
+        id: id,
         room_width: try_u32(problem_json.room_width)?,
         room_height: try_u32(problem_json.room_height)?,
         stage_width: try_u32(problem_json.stage_width)?,
@@ -94,4 +96,44 @@ fn try_read_problem(id: u32) -> Result<Problem> {
 
 pub fn read_problem(id: u32) -> Problem {
     try_read_problem(id).expect("Cannot read problem {}")
+}
+
+#[derive(Debug, Serialize)]
+struct Placement {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct Submission {
+    placements: Vec<Placement>,
+}
+
+#[derive(Debug, Serialize)]
+struct PostBody {
+    problem_id: u32,
+    contents: String,
+}
+
+pub fn submit_placements(token: &str, id: u32, placements: &[(f64, f64)]) -> Result<()> {
+    let submission = Submission {
+        placements: placements
+            .iter()
+            .map(|&(x, y)| Placement { x, y })
+            .collect(),
+    };
+    let submission_str = serde_json::to_string(&submission).unwrap();
+    let post_body = PostBody {
+        problem_id: id,
+        contents: submission_str,
+    };
+
+    reqwest::blocking::Client::builder()
+        .build()?
+        .post("https://api.icfpcontest.com/submission")
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&post_body)
+        .send()?;
+
+    Ok(())
 }

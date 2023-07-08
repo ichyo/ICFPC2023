@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::{fs::File, io::Write};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -154,6 +154,18 @@ pub fn submit_placements(token: &str, id: u32, placements: &[(f64, f64)]) -> Res
         problem_id: id,
         contents: submission_str,
     };
+
+    let backup_file_path = format!(
+        "submissions/{}_{}.json",
+        id,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let mut backup_file = File::create(&backup_file_path)?;
+    backup_file.write_all(serde_json::to_string(&post_body)?.as_bytes())?;
+    eprintln!("Saved to {}", backup_file_path);
 
     reqwest::blocking::Client::builder()
         .build()?

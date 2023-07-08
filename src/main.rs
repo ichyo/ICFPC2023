@@ -720,7 +720,7 @@ fn main() {
             let (placements_anneal, anneal_iter) = annealing(
                 &problem,
                 &placements,
-                Duration::from_secs(60 * 30),
+                Duration::from_secs(60 * 5),
                 1e5,
                 1e0,
             );
@@ -741,7 +741,7 @@ fn main() {
 
             let max_score = user_board[id as usize - 1].unwrap_or(0);
 
-            if score.score as f64 > max_score as f64 * 1.05 && score.score > score_anneal.score {
+            if score.score as f64 > (max_score as f64 * 1.01).min(max_score as f64 + 100000.0) && score.score > score_anneal.score {
                 eprintln!("Submitting problem {} with score {} ({}% increase)", id, score.score.separate_with_commas(), if max_score > 0 { (score.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
                 io::submit_placements(
                     &token,
@@ -756,7 +756,7 @@ fn main() {
                 .unwrap();
             }
 
-            if score_anneal.score as f64 > max_score as f64 * 1.05 && score.score < score_anneal.score {
+            if score_anneal.score as f64 > (max_score as f64 * 1.01).min(max_score as f64 + 100000.0) && score.score < score_anneal.score {
                 eprintln!("Submitting problem {} with score {} ({}% increase) (anneal)", id, score_anneal.score.separate_with_commas(), if max_score > 0 { (score_anneal.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
                 io::submit_placements(
                     &token,

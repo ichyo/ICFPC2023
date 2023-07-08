@@ -23,7 +23,7 @@ for i, x in sorted(results_with_id, key=lambda x: x[1], reverse=True):
     a = len(prob['attendees'])
     p_num = (prob['stage_width'] - 19) * (prob['stage_height'] - 19)
     cum += x
-    print(i, x, x / total, cum / total, m * a, m * m * a, p_num)
+    print(i, x, x / total, cum / total, m, a, p_num)
 
 
 

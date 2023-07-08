@@ -1,11 +1,7 @@
 mod geo;
 mod io;
 
-use std::{
-    collections::HashMap,
-    f64::consts::{PI},
-    time::Duration,
-};
+use std::{collections::HashMap, f64::consts::PI, time::Duration};
 
 use rand::prelude::*;
 use rayon::prelude::*;
@@ -694,8 +690,7 @@ fn main() {
 
     let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
 
-    // let user_board = io::get_userboard(&token).unwrap();
-    let user_board = vec![None; 100]; // TODO: remove
+    let user_board = io::get_userboard(&token).unwrap();
 
     let mut best_ids: Vec<u32> = (1..=MAX_PROBLEM_ID).collect();
     best_ids.sort_by_key(|id| std::cmp::Reverse(user_board[*id as usize - 1].unwrap_or(0)));
@@ -703,12 +698,12 @@ fn main() {
     let results: Vec<_> = (1..=MAX_PROBLEM_ID)
         .into_par_iter()
         .filter(|&id| {
-            if best_ids.iter().take(10).find(|&x| x == &id).is_none() {
-                // return false;
-            }
-            if !vec![8, 2, 1, 12].contains(&id) {
-                return false;
-            }
+            // if best_ids.iter().take(10).find(|&x| x == &id).is_none() {
+            //     // return false;
+            // }
+            // if !vec![8, 2, 1, 12].contains(&id) {
+            //     return false;
+            // }
             true
         })
         .map(|id| {
@@ -716,8 +711,7 @@ fn main() {
             let m = problem.musicians.len();
             let a = problem.attendees.len();
 
-
-            let placements = generate_without_block(&problem, Duration::from_secs(60), 1e6, 1e0);
+            let placements = generate_without_block(&problem, Duration::from_secs(60), 1e5, 1e0);
 
             let score = compute_score(&problem, &placements);
 
@@ -726,7 +720,7 @@ fn main() {
             let (placements_anneal, anneal_iter) = annealing(
                 &problem,
                 &placements,
-                Duration::from_secs(60 * 5),
+                Duration::from_secs(60 * 30),
                 1e5,
                 1e0,
             );
@@ -747,35 +741,35 @@ fn main() {
 
             let max_score = user_board[id as usize - 1].unwrap_or(0);
 
-            // if score.score as f64 > max_score as f64 * 1.05 && score.score > score_anneal.score {
-            //     eprintln!("Submitting problem {} with score {} ({}% increase)", id, score.score.separate_with_commas(), if max_score > 0 { (score.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
-            //     io::submit_placements(
-            //         &token,
-            //         problem.id,
-            //         placements
-            //             .iter()
-            //             .cloned()
-            //             .map(|(x, y)| (x as f64, y as f64))
-            //             .collect::<Vec<_>>()
-            //             .as_slice(),
-            //     )
-            //     .unwrap();
-            // }
+            if score.score as f64 > max_score as f64 * 1.05 && score.score > score_anneal.score {
+                eprintln!("Submitting problem {} with score {} ({}% increase)", id, score.score.separate_with_commas(), if max_score > 0 { (score.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
+                io::submit_placements(
+                    &token,
+                    problem.id,
+                    placements
+                        .iter()
+                        .cloned()
+                        .map(|(x, y)| (x as f64, y as f64))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                )
+                .unwrap();
+            }
 
-            // if score_anneal.score as f64 > max_score as f64 * 1.05 && score.score < score_anneal.score {
-            //     eprintln!("Submitting problem {} with score {} ({}% increase) (anneal)", id, score_anneal.score.separate_with_commas(), if max_score > 0 { (score_anneal.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
-            //     io::submit_placements(
-            //         &token,
-            //         problem.id,
-            //        placements_anneal
-            //             .iter()
-            //             .cloned()
-            //             .map(|(x, y)| (x as f64, y as f64))
-            //             .collect::<Vec<_>>()
-            //             .as_slice(),
-            //     )
-            //     .unwrap();
-            // }
+            if score_anneal.score as f64 > max_score as f64 * 1.05 && score.score < score_anneal.score {
+                eprintln!("Submitting problem {} with score {} ({}% increase) (anneal)", id, score_anneal.score.separate_with_commas(), if max_score > 0 { (score_anneal.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
+                io::submit_placements(
+                    &token,
+                    problem.id,
+                   placements_anneal
+                        .iter()
+                        .cloned()
+                        .map(|(x, y)| (x as f64, y as f64))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                )
+                .unwrap();
+            }
 
             (problem, placements, score, score_anneal)
         })

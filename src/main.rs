@@ -720,7 +720,7 @@ fn main() {
             let (placements_anneal, anneal_iter) = annealing(
                 &problem,
                 &placements,
-                Duration::from_secs(60 * 5),
+                Duration::from_secs(60 * 60),
                 1e5,
                 1e0,
             );

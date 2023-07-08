@@ -1,7 +1,7 @@
 mod geo;
 mod io;
 
-use std::{fmt::Debug, time::Duration};
+use std::{collections::HashMap, fmt::Debug, time::Duration};
 
 use rand::prelude::*;
 use rayon::prelude::*;
@@ -108,6 +108,60 @@ fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
         }
     }
 
+    placements
+}
+
+fn generate_without_block(
+    problem: &io::Problem,
+    duration: Duration,
+    early_stop: Duration,
+) -> Vec<Point> {
+    let mut score_cache = HashMap::new();
+    for sy in PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS {
+        let y = sy + problem.stage_bottom();
+        for sx in PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS {
+            let x = sx + problem.stage_left();
+            for inst_type in 0..=problem.max_inst() {
+                let mut score = 0;
+                for a in &problem.attendees {
+                    let taste_value = a.tastes[inst_type as usize] as i64;
+                    let d2 = dist_sq((x, y), (a.x, a.y)) as i64;
+                    let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
+                    score += add_score;
+                }
+                score_cache.insert(((x, y), inst_type), score);
+            }
+        }
+    }
+
+    let mut rng = rand::thread_rng();
+    let mut placements = generate_random_placement(problem);
+    let start = std::time::Instant::now();
+    let mut last_update = start;
+    while start.elapsed() < duration && last_update.elapsed() < early_stop {
+        let k = rng.gen_range(0..problem.musicians.len());
+        let nx = problem.stage_bottom_left.0
+            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS);
+        let ny = problem.stage_bottom_left.1
+            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS);
+        let inst_type = problem.musicians[k];
+
+        if (0..problem.musicians.len())
+            .any(|j| j != k && within_or_equal((nx, ny), placements[j], PLACEMENT_RADIUS))
+        {
+            continue;
+        }
+
+        let mut score_diff = 0i64;
+        score_diff -= score_cache[&(placements[k], inst_type)];
+        score_diff += score_cache[&((nx, ny), inst_type)];
+
+        if score_diff > 0 {
+            placements[k] = (nx, ny);
+            last_update = std::time::Instant::now();
+            // eprintln!("{}s: {}", start.elapsed().as_secs(), score_diff);
+        }
+    }
     placements
 }
 
@@ -234,9 +288,9 @@ fn main() {
         let m = problem.musicians.len();
         let a = problem.attendees.len();
 
-        if !vec![8].into_iter().find(|&x| x == id).is_some() {
-            return;
-        }
+        // if !vec![8].into_iter().find(|&x| x == id).is_some() {
+        //     return;
+        // }
 
         /*
         if m * m * a > 10_000_000_000 {
@@ -270,40 +324,37 @@ fn main() {
         );
         */
 
-        let start = std::time::Instant::now();
-        let mut best_init = generate_random_placement(&problem);
-        let mut best_init_score = compute_score(&problem, &best_init);
-        while start.elapsed() < std::time::Duration::from_secs(2) {
-            let p = generate_random_placement(&problem);
-            let score = compute_score(&problem, &p);
-            if score > best_init_score {
-                best_init = p;
-                best_init_score = score;
-            }
-        }
-        let placements = best_init;
+        let placements =
+            generate_without_block(&problem, Duration::from_secs(60), Duration::from_secs(10));
 
         eprintln!(
-            "Start anealing {} from score {}",
+            "Start optimizing {} from score {}",
             id,
             compute_score(&problem, &placements)
         );
-        let placements = annealing(&problem, &placements, Duration::from_secs(60), 1e6, 1e2);
+
+        let placements = climbing(
+            &problem,
+            &placements,
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        );
+        // let placements = annealing(&problem, &placements, Duration::from_secs(60), 1e6, 1e2);
         let score = compute_score_debug(&problem, &placements, true);
         eprintln!("Id: {} Score: {}", id, score);
 
-        // if score > 0 {
-        //     eprintln!("Submitting problem {} with score {}", id, score);
-        //     io::submit_placements(
-        //         &token,
-        //         problem.id,
-        //         placements
-        //             .into_iter()
-        //             .map(|(x, y)| (x as f64, y as f64))
-        //             .collect::<Vec<_>>()
-        //             .as_slice(),
-        //     )
-        //     .unwrap();
-        // }
+        if score > 0 {
+            eprintln!("Submitting problem {} with score {}", id, score);
+            io::submit_placements(
+                &token,
+                problem.id,
+                placements
+                    .into_iter()
+                    .map(|(x, y)| (x as f64, y as f64))
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .unwrap();
+        }
     })
 }

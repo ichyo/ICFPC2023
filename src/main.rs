@@ -114,7 +114,8 @@ fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
 fn generate_without_block(
     problem: &io::Problem,
     duration: Duration,
-    early_stop: Duration,
+    start_temp: f64,
+    end_temp: f64,
 ) -> Vec<Point> {
     let mut score_cache = HashMap::new();
     for sy in PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS {
@@ -135,16 +136,24 @@ fn generate_without_block(
     }
 
     let mut rng = rand::thread_rng();
-    let mut placements = generate_random_placement(problem);
     let start = std::time::Instant::now();
-    let mut last_update = start;
-    while start.elapsed() < duration && last_update.elapsed() < early_stop {
+    let mut placements = generate_random_placement(problem);
+    let mut iterations = 0u64;
+    loop {
+        let time = start.elapsed().as_secs_f64() / duration.as_secs_f64();
+        if time >= 1.0 {
+            break;
+        }
+
+        let temp = start_temp + (end_temp - start_temp) * time;
+
         let k = rng.gen_range(0..problem.musicians.len());
+        let inst_type = problem.musicians[k];
+
         let nx = problem.stage_bottom_left.0
             + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS);
         let ny = problem.stage_bottom_left.1
             + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS);
-        let inst_type = problem.musicians[k];
 
         if (0..problem.musicians.len())
             .any(|j| j != k && within_or_equal((nx, ny), placements[j], PLACEMENT_RADIUS))
@@ -156,12 +165,24 @@ fn generate_without_block(
         score_diff -= score_cache[&(placements[k], inst_type)];
         score_diff += score_cache[&((nx, ny), inst_type)];
 
-        if score_diff > 0 {
+        let prob = (score_diff as f64 / temp).exp().clamp(0.0, 1.0);
+
+        if rng.gen_bool(prob) {
+            // eprintln!(
+            //     "{}s: {} (prob={}, temp={}, time={})",
+            //     start.elapsed().as_secs(),
+            //     score_diff,
+            //     prob,
+            //     temp,
+            //     time
+            // );
             placements[k] = (nx, ny);
-            last_update = std::time::Instant::now();
-            // eprintln!("{}s: {}", start.elapsed().as_secs(), score_diff);
         }
+        iterations += 1;
     }
+
+    dbg!(iterations);
+
     placements
 }
 
@@ -178,7 +199,7 @@ fn annealing(
     let mut score = compute_score(problem, &placements);
 
     let start = std::time::Instant::now();
-    let mut iterations = 0;
+    let mut iterations = 0u64;
     loop {
         let time = start.elapsed().as_secs_f64() / duration.as_secs_f64();
         if time >= 1.0 {
@@ -232,54 +253,6 @@ fn annealing(
     placements
 }
 
-fn climbing(
-    problem: &io::Problem,
-    init: &[Point],
-    timeout: Duration,
-    early_stop: Duration,
-) -> Vec<Point> {
-    let mut rng = rand::thread_rng();
-
-    let mut placements = init.to_vec();
-    let mut score = compute_score(problem, &placements);
-
-    let start = std::time::Instant::now();
-    let mut last_update = start;
-    while start.elapsed() < timeout && last_update.elapsed() < early_stop {
-        let k = rng.gen_range(0..problem.musicians.len());
-
-        let current = placements[k];
-
-        let x = problem.stage_bottom_left.0
-            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS);
-        let y = problem.stage_bottom_left.1
-            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS);
-
-        if !problem.within_stage(x, y, PLACEMENT_RADIUS) {
-            continue;
-        }
-
-        if (0..problem.musicians.len())
-            .any(|j| j != k && within_or_equal((x, y), placements[j], PLACEMENT_RADIUS))
-        {
-            continue;
-        }
-
-        placements[k] = (x, y);
-
-        let new_score = compute_score(problem, &placements);
-        if new_score > score {
-            //eprintln!("{}s: {} -> {}", start.elapsed().as_secs(), score, new_score);
-            score = new_score;
-            last_update = std::time::Instant::now();
-        } else {
-            placements[k] = current;
-        }
-    }
-
-    placements
-}
-
 fn main() {
     let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
 
@@ -288,11 +261,7 @@ fn main() {
         let m = problem.musicians.len();
         let a = problem.attendees.len();
 
-        if !vec![8, 12, 30, 29, 25, 11, 26, 28]
-            .into_iter()
-            .find(|&x| x == id)
-            .is_some()
-        {
+        if !vec![8].into_iter().find(|&x| x == id).is_some() {
             return;
         }
 
@@ -328,14 +297,14 @@ fn main() {
         );
         */
 
-        let placements =
-            generate_without_block(&problem, Duration::from_secs(60), Duration::from_secs(10));
+        let placements = generate_without_block(&problem, Duration::from_secs(60), 1e6, 1e0);
 
         eprintln!(
             "Start optimizing {} from score {}",
             id,
             compute_score(&problem, &placements)
         );
+        return;
 
         // let placements = climbing(
         //     &problem,

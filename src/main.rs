@@ -213,13 +213,13 @@ fn annealing(
         let prob = (score_diff as f64 / temp).exp().clamp(0.0, 1.0);
 
         if rng.gen_bool(prob) {
-            eprintln!(
-                "{}s: {} -> {} ({})",
-                start.elapsed().as_secs(),
-                score,
-                new_score,
-                new_score - score
-            );
+            // eprintln!(
+            //     "{}s: {} -> {} ({})",
+            //     start.elapsed().as_secs(),
+            //     score,
+            //     new_score,
+            //     new_score - score
+            // );
             score = new_score;
         } else {
             placements[k] = current;
@@ -288,9 +288,13 @@ fn main() {
         let m = problem.musicians.len();
         let a = problem.attendees.len();
 
-        // if !vec![8].into_iter().find(|&x| x == id).is_some() {
-        //     return;
-        // }
+        if !vec![8, 12, 30, 29, 25, 11, 26, 28]
+            .into_iter()
+            .find(|&x| x == id)
+            .is_some()
+        {
+            return;
+        }
 
         /*
         if m * m * a > 10_000_000_000 {
@@ -333,13 +337,19 @@ fn main() {
             compute_score(&problem, &placements)
         );
 
-        let placements = climbing(
+        // let placements = climbing(
+        //     &problem,
+        //     &placements,
+        //     Duration::from_secs(60),
+        //     Duration::from_secs(10),
+        // );
+        let placements = annealing(
             &problem,
             &placements,
-            Duration::from_secs(60),
-            Duration::from_secs(10),
+            Duration::from_secs(50 * 60),
+            1e6,
+            1e2,
         );
-        // let placements = annealing(&problem, &placements, Duration::from_secs(60), 1e6, 1e2);
         let score = compute_score_debug(&problem, &placements, true);
         eprintln!("Id: {} Score: {}", id, score);
 

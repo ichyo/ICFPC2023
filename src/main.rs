@@ -1,7 +1,12 @@
 mod geo;
 mod io;
 
-use std::{collections::HashMap, fmt::Debug, time::Duration};
+use std::{
+    collections::HashMap,
+    f64::consts::{FRAC_2_PI, FRAC_PI_2, PI},
+    fmt::Debug,
+    time::Duration,
+};
 
 use rand::prelude::*;
 use rayon::prelude::*;
@@ -24,16 +29,87 @@ const PLACEMENT_RADIUS: u32 = 10;
 
 const SCORE_FACTOR: i64 = 1_000_000;
 
-fn compute_score(problem: &io::Problem, placements: &[Point]) -> i64 {
-    compute_score_debug(problem, placements, false)
+struct ScoreInfo {
+    score: i64,
+    blocked_score: i64,
+
+    block_count: u32,
+    pass_count: u32,
 }
 
-fn compute_score_debug(problem: &io::Problem, placements: &[Point], debug: bool) -> i64 {
+fn compute_score_fast(problem: &io::Problem, placements: &[Point]) -> i64 {
+    let mut events = Vec::new();
+    let mut score = 0i64;
+
+    for k in 0..problem.musicians.len() {
+        events.clear();
+        let inst_type = problem.musicians[k];
+
+        let p = geo::Point::new(placements[k].0 as f64, placements[k].1 as f64);
+        for i in 0..problem.attendees.len() {
+            let a = &problem.attendees[i];
+            let q = geo::Point::new(a.x as f64, a.y as f64);
+            let th = (q - p).arctan();
+            events.push((th, 0, i));
+        }
+
+        for j in 0..problem.musicians.len() {
+            if j == k {
+                continue;
+            }
+            let q = geo::Point::new(placements[j].0 as f64, placements[j].1 as f64);
+            let th = (q - p).arctan();
+
+            let th_width = (BLOCK_RADIUS as f64 / (q - p).norm()).asin();
+            if th - th_width <= -PI {
+                events.push((-1e9, 1, 0));
+                events.push((th + th_width, -1, 0));
+                events.push((2.0 * PI + (th - th_width), 1, 0));
+                events.push((1e9, -1, 0));
+            } else if th + th_width > PI {
+                events.push((th - th_width, 1, 0));
+                events.push((1e9, -1, 0));
+                events.push((-1e9, 1, 0));
+                events.push((th + th_width - 2.0 * PI, -1, 0));
+            } else {
+                events.push((th - th_width, 1, 0));
+                events.push((th + th_width, -1, 0));
+            }
+        }
+
+        let mut counter = 0i64;
+
+        events.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap()
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        for &(_, t, i) in &events {
+            if t == 0 {
+                assert!(counter >= 0);
+                if counter == 0 {
+                    let taste_value = problem.attendees[i].tastes[inst_type as usize] as i64;
+                    let a = &problem.attendees[i];
+                    let d2 = dist_sq(placements[k], (a.x, a.y)) as i64;
+                    let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
+                    score += add_score;
+                }
+            } else {
+                counter += t;
+            }
+        }
+    }
+
+    score
+}
+
+fn compute_score(problem: &io::Problem, placements: &[Point]) -> ScoreInfo {
     let mut score = 0;
 
     let mut block_count = 0;
     let mut pass_count = 0;
-    let mut block_score = 0;
+    let mut blocked_score = 0;
 
     for a in &problem.attendees {
         for k in 0..problem.musicians.len() {
@@ -55,7 +131,7 @@ fn compute_score_debug(problem: &io::Problem, placements: &[Point], debug: bool)
                     ) <= (BLOCK_RADIUS as f64).powi(2) + 2e-4
             }) {
                 block_count += 1;
-                block_score += add_score;
+                blocked_score += add_score;
                 continue;
             }
             pass_count += 1;
@@ -63,20 +139,30 @@ fn compute_score_debug(problem: &io::Problem, placements: &[Point], debug: bool)
             score += add_score;
         }
     }
-    if debug {
-        eprintln!(
-            "block: {} pass: {} block_score: {} score: {}",
-            block_count.separate_with_commas(),
-            pass_count.separate_with_commas(),
-            block_score.separate_with_commas(),
-            score.separate_with_commas()
-        );
+    ScoreInfo {
+        score,
+        blocked_score,
+        block_count,
+        pass_count,
     }
-
-    score
 }
 
 fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
+    let x_list = (problem.stage_left() + PLACEMENT_RADIUS
+        ..=problem.stage_right() - PLACEMENT_RADIUS)
+        .collect::<Vec<_>>();
+
+    let y_list = (problem.stage_bottom() + PLACEMENT_RADIUS
+        ..=problem.stage_top() - PLACEMENT_RADIUS)
+        .collect::<Vec<_>>();
+    generate_random_placement_from_list(problem, &x_list, &y_list)
+}
+
+fn generate_random_placement_from_list(
+    problem: &io::Problem,
+    x_list: &[u32],
+    y_list: &[u32],
+) -> Vec<Point> {
     assert!(
         problem.stage_width >= PLACEMENT_RADIUS * 2 && problem.stage_height >= PLACEMENT_RADIUS * 2
     );
@@ -86,11 +172,10 @@ fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
     let mut placements = Vec::new();
 
     for i in 0..problem.musicians.len() {
+        let mut retry = 0;
         loop {
-            let x = problem.stage_bottom_left.0
-                + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS);
-            let y = problem.stage_bottom_left.1
-                + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS);
+            let x = *x_list.choose(&mut rng).unwrap();
+            let y = *y_list.choose(&mut rng).unwrap();
 
             assert!(x <= problem.room_width);
             assert!(y <= problem.room_height);
@@ -100,6 +185,8 @@ fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
                 .iter()
                 .any(|&p| within_or_equal(p, (x, y), PLACEMENT_RADIUS))
             {
+                retry += 1;
+                assert!(retry <= 1000);
                 continue;
             }
 
@@ -111,17 +198,52 @@ fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
     placements
 }
 
+fn sample_by_unit(min_x: u32, max_x: u32, unit: u32) -> Vec<u32> {
+    (min_x..=max_x).filter(|x| x % unit == 0).collect()
+}
+
 fn generate_without_block(
     problem: &io::Problem,
     duration: Duration,
     start_temp: f64,
     end_temp: f64,
 ) -> Vec<Point> {
+    let unit = (1..=100)
+        .into_iter()
+        .filter(|u| {
+            let cache_size = sample_by_unit(
+                problem.stage_left() + PLACEMENT_RADIUS,
+                problem.stage_right() - PLACEMENT_RADIUS,
+                *u,
+            )
+            .len() as u64
+                * sample_by_unit(
+                    problem.stage_bottom() + PLACEMENT_RADIUS,
+                    problem.stage_top() - PLACEMENT_RADIUS,
+                    *u,
+                )
+                .len() as u64
+                * (problem.max_inst() + 1) as u64;
+            let combinations = cache_size * problem.attendees.len() as u64;
+            cache_size <= 1e8 as u64 && combinations <= 1e10 as u64
+        })
+        .next()
+        .unwrap();
+
+    let x_list = sample_by_unit(
+        problem.stage_left() + PLACEMENT_RADIUS,
+        problem.stage_right() - PLACEMENT_RADIUS,
+        unit,
+    );
+    let y_list = sample_by_unit(
+        problem.stage_bottom() + PLACEMENT_RADIUS,
+        problem.stage_top() - PLACEMENT_RADIUS,
+        unit,
+    );
+
     let mut score_cache = HashMap::new();
-    for sy in PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS {
-        let y = sy + problem.stage_bottom();
-        for sx in PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS {
-            let x = sx + problem.stage_left();
+    for &y in &y_list {
+        for &x in &x_list {
             for inst_type in 0..=problem.max_inst() {
                 let mut score = 0;
                 for a in &problem.attendees {
@@ -135,9 +257,21 @@ fn generate_without_block(
         }
     }
 
+    let mut placements = generate_random_placement(problem);
+    for k in 0..placements.len() {
+        let inst_type = problem.musicians[k];
+        let mut score = 0;
+        for a in &problem.attendees {
+            let taste_value = a.tastes[inst_type as usize] as i64;
+            let d2 = dist_sq(placements[k], (a.x, a.y)) as i64;
+            let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
+            score += add_score;
+        }
+        score_cache.insert((placements[k], inst_type), score);
+    }
+
     let mut rng = rand::thread_rng();
     let start = std::time::Instant::now();
-    let mut placements = generate_random_placement(problem);
     let mut iterations = 0u64;
     loop {
         let time = start.elapsed().as_secs_f64() / duration.as_secs_f64();
@@ -150,10 +284,8 @@ fn generate_without_block(
         let k = rng.gen_range(0..problem.musicians.len());
         let inst_type = problem.musicians[k];
 
-        let nx = problem.stage_bottom_left.0
-            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS);
-        let ny = problem.stage_bottom_left.1
-            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS);
+        let nx = *x_list.choose(&mut rng).unwrap();
+        let ny = *y_list.choose(&mut rng).unwrap();
 
         if (0..problem.musicians.len())
             .any(|j| j != k && within_or_equal((nx, ny), placements[j], PLACEMENT_RADIUS))
@@ -181,7 +313,7 @@ fn generate_without_block(
         iterations += 1;
     }
 
-    dbg!(iterations);
+    // dbg!(iterations);
 
     placements
 }
@@ -192,11 +324,11 @@ fn annealing(
     duration: Duration,
     start_temp: f64,
     end_temp: f64,
-) -> Vec<Point> {
+) -> (Vec<Point>, u64) {
     let mut rng = rand::thread_rng();
 
     let mut placements = init.to_vec();
-    let mut score = compute_score(problem, &placements);
+    let mut score = compute_score_fast(problem, &placements);
 
     let start = std::time::Instant::now();
     let mut iterations = 0u64;
@@ -208,28 +340,72 @@ fn annealing(
 
         let temp = start_temp + (end_temp - start_temp) * time;
 
-        let k = rng.gen_range(0..problem.musicians.len());
+        let update_type = rng.gen_range(0..3);
+        let mut undo: Box<dyn FnMut(&mut Vec<(u32, u32)>)> = if update_type == 0 {
+            let k = rng.gen_range(0..problem.musicians.len());
 
-        let current = placements[k];
+            let current = placements[k];
 
-        let x = problem.stage_bottom_left.0
-            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS);
-        let y = problem.stage_bottom_left.1
-            + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS);
+            let x = problem.stage_bottom_left.0
+                + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_width - PLACEMENT_RADIUS);
+            let y = problem.stage_bottom_left.1
+                + rng.gen_range(PLACEMENT_RADIUS..=problem.stage_height - PLACEMENT_RADIUS);
 
-        // if !problem.within_stage(x, y, PLACEMENT_RADIUS) {
-        //     continue;
-        // }
+            // if !problem.within_stage(x, y, PLACEMENT_RADIUS) {
+            //     continue;
+            // }
 
-        if (0..problem.musicians.len())
-            .any(|j| j != k && within_or_equal((x, y), placements[j], PLACEMENT_RADIUS))
-        {
-            continue;
-        }
+            if (0..problem.musicians.len())
+                .any(|j| j != k && within_or_equal((x, y), placements[j], PLACEMENT_RADIUS))
+            {
+                continue;
+            }
 
-        placements[k] = (x, y);
+            placements[k] = (x, y);
 
-        let new_score = compute_score(problem, &placements);
+            Box::new(move |p| p[k] = current)
+        } else if update_type == 1 {
+            let k = rng.gen_range(0..problem.musicians.len());
+
+            let current = placements[k];
+
+            let x = rng.gen_range(
+                current.0.saturating_sub(PLACEMENT_RADIUS)..=current.0 + PLACEMENT_RADIUS,
+            );
+            let y = rng.gen_range(
+                current.1.saturating_sub(PLACEMENT_RADIUS)..=current.1 + PLACEMENT_RADIUS,
+            );
+
+            if !problem.within_stage(x, y, PLACEMENT_RADIUS) {
+                continue;
+            }
+
+            if (0..problem.musicians.len())
+                .any(|j| j != k && within_or_equal((x, y), placements[j], PLACEMENT_RADIUS))
+            {
+                continue;
+            }
+
+            placements[k] = (x, y);
+
+            Box::new(move |p| p[k] = current)
+        } else {
+            let (i, j) = {
+                let v = (0..problem.musicians.len()).choose_multiple(&mut rng, 2);
+                (v[0], v[1])
+            };
+
+            if problem.musicians[i] == problem.musicians[j] {
+                continue;
+            }
+
+            placements.swap(i, j);
+
+            Box::new(move |p| p.swap(i, j))
+        };
+
+        let new_score = compute_score_fast(problem, &placements);
+
         let score_diff = new_score - score;
         let prob = (score_diff as f64 / temp).exp().clamp(0.0, 1.0);
 
@@ -243,97 +419,145 @@ fn annealing(
             // );
             score = new_score;
         } else {
-            placements[k] = current;
+            undo(&mut placements);
         }
 
         iterations += 1;
     }
-    eprintln!("iterations: {}", iterations);
 
-    placements
+    (placements, iterations)
 }
 
 fn main() {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(22)
+        .build_global()
+        .unwrap();
+
     let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
 
-    (1..=MAX_PROBLEM_ID).into_par_iter().for_each(|id| {
-        let problem = io::read_problem(id);
-        let m = problem.musicians.len();
-        let a = problem.attendees.len();
+    let user_board = io::get_userboard(&token).unwrap();
 
-        if !vec![8].into_iter().find(|&x| x == id).is_some() {
-            return;
-        }
+    let mut best_ids: Vec<u32> = (1..=MAX_PROBLEM_ID).collect();
+    best_ids.sort_by_key(|id| std::cmp::Reverse(user_board[*id as usize - 1].unwrap_or(0)));
 
-        /*
-        if m * m * a > 10_000_000_000 {
-            eprintln!(
-                "Skipping problem {}: too many combinations ({})",
-                id,
-                (m * m * a).separate_with_commas()
+    let results: Vec<_> = (1..=MAX_PROBLEM_ID)
+        .into_par_iter()
+        .filter(|&id| {
+            if best_ids.iter().take(10).find(|&x| x == &id).is_none() {
+                return false;
+            }
+            true
+        })
+        .map(|id| {
+            let problem = io::read_problem(id);
+            let m = problem.musicians.len();
+            let a = problem.attendees.len();
+
+
+            let placements = generate_without_block(&problem, Duration::from_secs(60), 1e6, 1e0);
+
+            let score = compute_score(&problem, &placements);
+
+            let score_ratio = score.score as f64 / (score.blocked_score + score.score) as f64;
+
+            let (placements_anneal, anneal_iter) = annealing(
+                &problem,
+                &placements,
+                Duration::from_secs(30 * 60),
+                1e5,
+                1e0,
             );
-            continue;
-        }
-        */
+            let score_anneal = compute_score(&problem, &placements_anneal);
 
-        /*
-        eprintln!("# musicians: {}", problem.musicians.len());
-        eprintln!("# attendees: {}", problem.attendees.len());
-        eprintln!(
-            "M * A: {}",
-            problem.musicians.len() * problem.attendees.len()
-        );
-        eprintln!(
-            "M^2 * A: {}",
-            problem.musicians.len().pow(2) * problem.attendees.len()
-        );
+            eprintln!(
+                "id: {:>2} block: {:>9} pass: {:>9} score: {:>14} score_without_block: {:>14} score_ratio: {:>3.0}% anneal_score: {:>14} anneal_score_ratio: {:>3.0}% anneal_iter: {:>10}",
+                id,
+                score.block_count.separate_with_commas(),
+                score.pass_count.separate_with_commas(),
+                score.score.separate_with_commas(),
+                (score.blocked_score + score.score).separate_with_commas(),
+                score_ratio * 100.0,
+                score_anneal.score.separate_with_commas(),
+                score_anneal.score as f64 / score.score as f64 * 100.0,
+                anneal_iter.separate_with_commas(),
+            );
 
-        eprintln!("room: {}x{}", problem.room_width, problem.room_height);
-        eprintln!("stage: {}x{}", problem.stage_width, problem.stage_height);
-        eprintln!(
-            "stage/room: {:.2}%",
-            100.0 * (problem.stage_width as f64 * problem.stage_height as f64)
-                / (problem.room_width as f64 * problem.room_height as f64)
-        );
-        */
+            let max_score = user_board[id as usize - 1].unwrap_or(0);
 
-        let placements = generate_without_block(&problem, Duration::from_secs(60), 1e6, 1e0);
+            if score.score as f64 > max_score as f64 * 1.05 && score.score > score_anneal.score {
+                eprintln!("Submitting problem {} with score {} ({}% increase)", id, score.score.separate_with_commas(), if max_score > 0 { (score.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
+                io::submit_placements(
+                    &token,
+                    problem.id,
+                    placements
+                        .iter()
+                        .cloned()
+                        .map(|(x, y)| (x as f64, y as f64))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                )
+                .unwrap();
+            }
 
-        eprintln!(
-            "Start optimizing {} from score {}",
-            id,
-            compute_score(&problem, &placements)
-        );
-        return;
+            if score_anneal.score as f64 > max_score as f64 * 1.05 && score.score < score_anneal.score {
+                eprintln!("Submitting problem {} with score {} ({}% increase) (anneal)", id, score_anneal.score.separate_with_commas(), if max_score > 0 { (score_anneal.score as f64 / max_score as f64 * 100.0 - 100.0).round() } else { 1e9 });
+                io::submit_placements(
+                    &token,
+                    problem.id,
+                   placements_anneal
+                        .iter()
+                        .cloned()
+                        .map(|(x, y)| (x as f64, y as f64))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                )
+                .unwrap();
+            }
 
-        // let placements = climbing(
-        //     &problem,
-        //     &placements,
-        //     Duration::from_secs(60),
-        //     Duration::from_secs(10),
-        // );
-        let placements = annealing(
-            &problem,
-            &placements,
-            Duration::from_secs(50 * 60),
-            1e6,
-            1e2,
-        );
-        let score = compute_score_debug(&problem, &placements, true);
-        eprintln!("Id: {} Score: {}", id, score);
+            (problem, placements, score)
+        })
+        .collect();
 
-        if score > 0 {
-            eprintln!("Submitting problem {} with score {}", id, score);
-            io::submit_placements(
-                &token,
-                problem.id,
-                placements
-                    .into_iter()
-                    .map(|(x, y)| (x as f64, y as f64))
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .unwrap();
-        }
-    })
+    let total_score = results
+        .iter()
+        .map(|(_, _, score)| score.score.max(0))
+        .sum::<i64>();
+    let score_without_block = results
+        .iter()
+        .map(|(_, _, score)| (score.blocked_score + score.score).max(score.score).max(0))
+        .sum::<i64>();
+
+    dbg!(total_score.separate_with_commas());
+    dbg!(score_without_block.separate_with_commas());
+
+    // eprintln!(
+    //     "Start optimizing {} from score {}",
+    //     id,
+    //     compute_score_debug(&problem, &placements, true)
+    // );
+
+    // let placements = annealing(
+    //     &problem,
+    //     &placements,
+    //     Duration::from_secs(50 * 60),
+    //     1e6,
+    //     1e0,
+    // );
+    // let score = compute_score_debug(&problem, &placements, true);
+    // eprintln!("Id: {} Score: {}", id, score);
+
+    // if score > 0 {
+    //     eprintln!("Submitting problem {} with score {}", id, score);
+    //     io::submit_placements(
+    //         &token,
+    //         problem.id,
+    //         placements
+    //             .into_iter()
+    //             .map(|(x, y)| (x as f64, y as f64))
+    //             .collect::<Vec<_>>()
+    //             .as_slice(),
+    //     )
+    //     .unwrap();
+    // }
 }

@@ -2,6 +2,7 @@ use std::fs::File;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Deserialize, Debug)]
 struct ProblemJson {
@@ -37,12 +38,14 @@ impl Problem {
     pub fn max_inst(&self) -> u32 {
         self.musicians.iter().max().unwrap().clone()
     }
+
     pub fn within_stage(&self, x: u32, y: u32, r: u32) -> bool {
         x >= self.stage_left() + r
             && x + r <= self.stage_right()
             && y >= self.stage_bottom() + r
             && y + r <= self.stage_top()
     }
+
     pub fn stage_left(&self) -> u32 {
         self.stage_bottom_left.0
     }
@@ -155,9 +158,24 @@ pub fn submit_placements(token: &str, id: u32, placements: &[(f64, f64)]) -> Res
     reqwest::blocking::Client::builder()
         .build()?
         .post("https://api.icfpcontest.com/submission")
-        .header("Authorization", format!("Bearer {}", token))
+        .bearer_auth(token)
         .json(&post_body)
         .send()?;
 
     Ok(())
+}
+
+pub fn get_userboard(token: &str) -> Result<Vec<Option<i64>>> {
+    let response = reqwest::blocking::Client::new()
+        .get("https://api.icfpcontest.com/userboard")
+        .bearer_auth(token)
+        .send()?;
+    let json: Value = response.json()?;
+    let problems = json["Success"]["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().map(|x| x as i64))
+        .collect();
+    Ok(problems)
 }

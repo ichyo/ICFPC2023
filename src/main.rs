@@ -697,7 +697,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(10)
+        .num_threads(18)
         .build_global()
         .unwrap();
 

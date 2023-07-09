@@ -8,6 +8,7 @@ use std::{
 };
 
 use bitvec::prelude::*;
+use log::info;
 use rand::prelude::*;
 use rayon::prelude::*;
 use thousands::Separable;
@@ -197,7 +198,7 @@ impl ScoreDiffCalculator {
             self.attendees[k].push((th, add_score));
         }
 
-        self.attendees[k].sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        self.attendees[k].sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
         for q in &self.placements {
             if let Some(q) = q {
@@ -538,6 +539,9 @@ fn annealing(
     let start = std::time::Instant::now();
     let mut iterations = 0u64;
 
+    let dx = [1, 0, -1, 0];
+    let dy = [0, 1, 0, -1];
+
     //let mut update_counter: HashMap<i32, u64> = HashMap::new();
     loop {
         let time = start.elapsed().as_secs_f64() / duration.as_secs_f64();
@@ -583,12 +587,14 @@ fn annealing(
 
                 let current = placements[k];
 
-                let x = rng.gen_range(
-                    current.0.saturating_sub(PLACEMENT_RADIUS)..=current.0 + PLACEMENT_RADIUS,
-                );
-                let y = rng.gen_range(
-                    current.1.saturating_sub(PLACEMENT_RADIUS)..=current.1 + PLACEMENT_RADIUS,
-                );
+                let r = rng.gen_range(0..4);
+                let len = rng.gen_range(1..=5);
+                let x = current.0.saturating_add_signed(len * dx[r]);
+                let y = current.1.saturating_add_signed(len * dy[r]);
+
+                if (x, y) == current {
+                    continue;
+                }
 
                 if !problem.within_stage(x, y, PLACEMENT_RADIUS) {
                     continue;
@@ -664,9 +670,18 @@ fn annealing(
     (placements, iterations)
 }
 
+struct ExecInfo {
+    id: u32,
+    score: i64,
+    iterations: u64,
+    best_score: i64,
+}
+
 fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     rayon::ThreadPoolBuilder::new()
-        .num_threads(24)
+        .num_threads(23)
         .build_global()
         .unwrap();
 
@@ -677,18 +692,19 @@ fn main() {
     let mut best_ids: Vec<u32> = (1..=MAX_PROBLEM_ID).collect();
     best_ids.sort_by_key(|id| std::cmp::Reverse(user_board[*id as usize - 1].unwrap_or(0)));
 
-    let use_wo_block = true;
+    let use_wo_block = false;
 
     let results: Vec<_> = (1..=MAX_PROBLEM_ID)
         .into_par_iter()
+        .filter(|&id| id <= 23)
         // .filter(|&id| id >= FIRST_PROBLEM_ID_PHASE_2)
         .map(|id| {
             let problem = io::read_problem(id);
 
-            let init_duration = Duration::from_secs(60);
-            let duration = Duration::from_secs(60 * 30);
+            let init_duration = Duration::from_secs(10);
+            let duration = Duration::from_secs(60);
 
-            eprintln!("Starting problem {} with duration {:?}", id, duration);
+            info!("Starting problem {} with duration {:?}", id, duration);
             let (placements, iterations) = annealing(
                 &problem,
                 &if use_wo_block {
@@ -703,7 +719,7 @@ fn main() {
 
             let score = compute_score_fast(&problem, &placements);
             let best_score = user_board[id as usize - 1].unwrap_or(0);
-            eprintln!(
+            info!(
                 "id: {:>2} score: {:>14} iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
                 id,
                 score.separate_with_commas(),
@@ -715,8 +731,8 @@ fn main() {
                     INFINITY
                 }
             );
-            if score as f64 > (best_score as f64 * 1.01).min(best_score as f64 + 100000.0) {
-                eprintln!(
+            if score as f64 > best_score as f64 + 1e6 {
+                info!(
                     "Submitting problem {} with score {} ({}% increase)",
                     id,
                     score.separate_with_commas(),
@@ -739,10 +755,31 @@ fn main() {
                 .unwrap();
             }
 
-            score
+            ExecInfo {
+                id,
+                score,
+                iterations,
+                best_score,
+            }
         })
         .collect();
 
-    let total_score = results.iter().sum::<i64>();
+    for result in &results {
+        info!(
+            "id: {:>2} score: {:>14} iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
+            result.id,
+            result.score.separate_with_commas(),
+            result.iterations.separate_with_commas(),
+            result.best_score.separate_with_commas(),
+            if result.best_score > 0 {
+                result.score as f64 * 100.0 / result.best_score as f64
+            } else {
+                INFINITY
+            }
+        );
+    }
+
+    let total_score = results.iter().map(|x| x.score).sum::<i64>();
+
     dbg!(total_score.separate_with_commas());
 }

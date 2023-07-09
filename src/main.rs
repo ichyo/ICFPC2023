@@ -406,7 +406,7 @@ fn generate_without_block(
             let combinations = cache_size * problem.attendees.len() as u64;
             let combinations2 =
                 w * h * problem.attendees.len() as u64 * problem.pillars.len() as u64;
-            cache_size <= 1e8 as u64 && combinations.max(combinations2) <= 1e10 as u64
+            cache_size <= 1e7 as u64 && combinations.max(combinations2) <= 1e9 as u64
         })
         .next()
         .unwrap();
@@ -451,28 +451,29 @@ fn generate_without_block(
 
     let mut placements = generate_random_placement(problem);
     for k in 0..placements.len() {
-        let inst_type = problem.musicians[k];
-        let mut score = 0;
-        let p = geo::Point::new(placements[k].0 as f64, placements[k].1 as f64);
-        for a in &problem.attendees {
-            let q = geo::Point::new(a.x as f64, a.y as f64);
-            let seg = (p, q);
+        for inst_type in 0..=problem.max_inst() {
+            let mut score = 0;
+            let p = geo::Point::new(placements[k].0 as f64, placements[k].1 as f64);
+            for a in &problem.attendees {
+                let q = geo::Point::new(a.x as f64, a.y as f64);
+                let seg = (p, q);
 
-            let blocked = problem.pillars.iter().any(|p| {
-                let center = geo::Point::new(p.center.0 as f64, p.center.1 as f64);
-                geo::dist_sq_segment_point(seg, center) < (p.radius as f64).powi(2)
-            });
+                let blocked = problem.pillars.iter().any(|p| {
+                    let center = geo::Point::new(p.center.0 as f64, p.center.1 as f64);
+                    geo::dist_sq_segment_point(seg, center) < (p.radius as f64).powi(2)
+                });
 
-            if blocked {
-                continue;
+                if blocked {
+                    continue;
+                }
+
+                let taste_value = a.tastes[inst_type as usize] as i64;
+                let d2 = dist_sq(placements[k], (a.x, a.y)) as i64;
+                let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
+                score += add_score;
             }
-
-            let taste_value = a.tastes[inst_type as usize] as i64;
-            let d2 = dist_sq(placements[k], (a.x, a.y)) as i64;
-            let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
-            score += add_score;
+            score_cache.insert((placements[k], inst_type), score);
         }
-        score_cache.insert((placements[k], inst_type), score);
     }
 
     let mut rng = rand::thread_rng();
@@ -486,34 +487,49 @@ fn generate_without_block(
 
         let temp = start_temp + (end_temp - start_temp) * time;
 
-        let k = rng.gen_range(0..problem.musicians.len());
-        let inst_type = problem.musicians[k];
+        let update_type = rng.gen_range(0..2);
+        if update_type == 0 {
+            let k = rng.gen_range(0..problem.musicians.len());
+            let inst_type = problem.musicians[k];
 
-        let nx = *x_list.choose(&mut rng).unwrap();
-        let ny = *y_list.choose(&mut rng).unwrap();
+            let nx = *x_list.choose(&mut rng).unwrap();
+            let ny = *y_list.choose(&mut rng).unwrap();
 
-        if (0..problem.musicians.len())
-            .any(|j| j != k && within((nx, ny), placements[j], PLACEMENT_RADIUS))
-        {
-            continue;
-        }
+            if (0..problem.musicians.len())
+                .any(|j| j != k && within((nx, ny), placements[j], PLACEMENT_RADIUS))
+            {
+                continue;
+            }
 
-        let mut score_diff = 0i64;
-        score_diff -= score_cache[&(placements[k], inst_type)];
-        score_diff += score_cache[&((nx, ny), inst_type)];
+            let mut score_diff = 0i64;
+            score_diff -= score_cache[&(placements[k], inst_type)];
+            score_diff += score_cache[&((nx, ny), inst_type)];
 
-        let prob = (score_diff as f64 / temp).exp().clamp(0.0, 1.0);
+            let prob = (score_diff as f64 / temp).exp().clamp(0.0, 1.0);
 
-        if rng.gen_bool(prob) {
-            // eprintln!(
-            //     "{}s: {} (prob={}, temp={}, time={})",
-            //     start.elapsed().as_secs(),
-            //     score_diff,
-            //     prob,
-            //     temp,
-            //     time
-            // );
-            placements[k] = (nx, ny);
+            if rng.gen_bool(prob) {
+                placements[k] = (nx, ny);
+            }
+        } else {
+            let (i, j) = {
+                let v = (0..problem.musicians.len()).choose_multiple(&mut rng, 2);
+                (v[0], v[1])
+            };
+            if problem.musicians[i] == problem.musicians[j] {
+                continue;
+            }
+
+            let mut score_diff = 0i64;
+            score_diff -= score_cache[&(placements[i], problem.musicians[i])];
+            score_diff -= score_cache[&(placements[j], problem.musicians[j])];
+            score_diff += score_cache[&(placements[j], problem.musicians[i])];
+            score_diff += score_cache[&(placements[i], problem.musicians[j])];
+
+            let prob = (score_diff as f64 / temp).exp().clamp(0.0, 1.0);
+
+            if rng.gen_bool(prob) {
+                placements.swap(i, j);
+            }
         }
         iterations += 1;
     }
@@ -681,7 +697,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(23)
+        .num_threads(10)
         .build_global()
         .unwrap();
 
@@ -692,17 +708,20 @@ fn main() {
     let mut best_ids: Vec<u32> = (1..=MAX_PROBLEM_ID).collect();
     best_ids.sort_by_key(|id| std::cmp::Reverse(user_board[*id as usize - 1].unwrap_or(0)));
 
-    let use_wo_block = false;
+    let use_wo_block = true;
 
-    let results: Vec<_> = (1..=MAX_PROBLEM_ID)
+    let run_ids: Vec<_> = (1..=MAX_PROBLEM_ID)
+        .filter(|&id| id >= FIRST_PROBLEM_ID_PHASE_2)
+        .rev()
+        .collect();
+
+    let results: Vec<_> = run_ids
         .into_par_iter()
-        .filter(|&id| id <= 23)
-        // .filter(|&id| id >= FIRST_PROBLEM_ID_PHASE_2)
         .map(|id| {
             let problem = io::read_problem(id);
 
-            let init_duration = Duration::from_secs(10);
-            let duration = Duration::from_secs(60);
+            let init_duration = Duration::from_secs(60);
+            let duration = Duration::from_secs(60 * 60);
 
             info!("Starting problem {} with duration {:?}", id, duration);
             let (placements, iterations) = annealing(
@@ -763,6 +782,8 @@ fn main() {
             }
         })
         .collect();
+
+    info!("Showing all results");
 
     for result in &results {
         info!(

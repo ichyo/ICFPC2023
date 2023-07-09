@@ -15,14 +15,17 @@ pub struct Point {
 }
 
 impl Point {
+    #[inline]
     pub fn new(x: f64, y: f64) -> Point {
         Point { x, y }
     }
 
+    #[inline]
     pub fn arctan(&self) -> f64 {
         self.y.atan2(self.x)
     }
 
+    #[inline]
     pub fn norm(&self) -> f64 {
         self.x.hypot(self.y)
     }

@@ -13,6 +13,7 @@ struct ProblemJson {
     stage_bottom_left: (f64, f64),
     musicians: Vec<f64>,
     attendees: Vec<AttendeeJson>,
+    pillars: Vec<PillarJson>
 }
 
 #[derive(Deserialize, Debug)]
@@ -20,6 +21,12 @@ struct AttendeeJson {
     x: f64,
     y: f64,
     tastes: Vec<f64>,
+}
+
+#[derive(Deserialize, Debug)]
+struct PillarJson {
+    center: (f64, f64),
+    radius: f64,
 }
 
 #[derive(Debug)]
@@ -32,9 +39,20 @@ pub struct Problem {
     pub stage_bottom_left: (u32, u32),
     pub musicians: Vec<u32>,
     pub attendees: Vec<Attendee>,
+    pub pillars: Vec<Pillar>,
+}
+
+#[derive(Debug)]
+pub struct Pillar {
+    pub center: (u32, u32),
+    pub radius: u32,
 }
 
 impl Problem {
+    pub fn bonus_enabled(&self) -> bool {
+        !self.pillars.is_empty()
+    }
+
     pub fn max_inst(&self) -> u32 {
         self.musicians.iter().max().unwrap().clone()
     }
@@ -114,6 +132,19 @@ fn try_read_problem(id: u32) -> Result<Problem> {
                         .iter()
                         .map(|&x| try_i32(x))
                         .collect::<Result<_>>()?,
+                })
+            })
+            .collect::<Result<_>>()?,
+        pillars: problem_json
+            .pillars
+            .iter()
+            .map(|p| {
+                Ok(Pillar {
+                    center: (
+                        try_u32(p.center.0)?,
+                        try_u32(p.center.1)?,
+                    ),
+                    radius: try_u32(p.radius)?,
                 })
             })
             .collect::<Result<_>>()?,

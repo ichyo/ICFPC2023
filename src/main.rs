@@ -9,7 +9,7 @@ use std::{
 
 use bitvec::prelude::*;
 use clap::Parser;
-use log::info;
+use log::{error, info};
 use rand::prelude::*;
 use rayon::prelude::*;
 use thousands::Separable;
@@ -861,7 +861,7 @@ fn main() {
                             INFINITY
                         }
                     );
-                    io::submit_placements(
+                    if let Err(e) = io::submit_placements(
                         &token,
                         problem.id,
                         placements
@@ -871,8 +871,9 @@ fn main() {
                             .collect::<Vec<_>>()
                             .as_slice(),
                         &volumes,
-                    )
-                    .unwrap();
+                    ) {
+                        error!("Failed to submit: {}", e);
+                    }
                 }
 
                 ExecInfo {

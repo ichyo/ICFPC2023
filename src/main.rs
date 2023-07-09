@@ -872,7 +872,7 @@ fn main() {
                             .as_slice(),
                         &volumes,
                     ) {
-                        error!("Failed to submit: {}", e);
+                        error!("Failed to submit {}: {}", problem.id, e);
                     }
                 }
 

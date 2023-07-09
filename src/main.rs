@@ -153,6 +153,16 @@ impl ScoreDiffCalculator {
         self.bonus_factor[k] = 0.0;
     }
 
+    fn swap_musician(&mut self, problem: &io::Problem, i: usize, j: usize) {
+        assert!(self.placements[i].is_some());
+        assert!(self.placements[j].is_some());
+
+        self.placements.swap(i, j);
+        self.attendees.swap(i, j);
+        self.blocked_count.swap(i, j);
+
+    }
+
     // O(|A| + |M| * (the size of range))
     fn place_musician(&mut self, problem: &io::Problem, k: usize, placement: Point) {
         assert!(self.attendees[k].is_empty());

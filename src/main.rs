@@ -8,6 +8,7 @@ use std::{
 };
 
 use bitvec::prelude::*;
+use clap::Parser;
 use log::info;
 use rand::prelude::*;
 use rayon::prelude::*;
@@ -693,114 +694,163 @@ struct ExecInfo {
     best_score: i64,
 }
 
+#[derive(Parser, Debug)]
+struct Args {
+    #[clap(short, long)]
+    threads: Option<usize>,
+    #[clap(long)]
+    top_n: Option<u32>,
+    #[clap(long)]
+    min_id: Option<u32>,
+    #[clap(long)]
+    max_id: Option<u32>,
+    #[clap(short, long, required = true)]
+    duration_mins: Vec<u64>,
+    #[clap(long)]
+    disable_init: bool,
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
+
+    let args = Args::parse();
+
+    info!("arguments: {:?}", args);
+
+    let threads = match args.threads {
+        Some(threads) => threads,
+        None => {
+            let physical_cpus = num_cpus::get_physical();
+            info!("-t not specified, using {} threads", physical_cpus);
+            physical_cpus
+        }
+    };
+
+    info!("Using {} threads", threads);
     rayon::ThreadPoolBuilder::new()
-        .num_threads(18)
+        .num_threads(threads)
         .build_global()
         .unwrap();
-
-    let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
 
     let user_board = io::get_userboard(&token).unwrap();
 
     let mut best_ids: Vec<u32> = (1..=MAX_PROBLEM_ID).collect();
     best_ids.sort_by_key(|id| std::cmp::Reverse(user_board[*id as usize - 1].unwrap_or(0)));
 
-    let use_wo_block = true;
-
-    let run_ids: Vec<_> = (1..=MAX_PROBLEM_ID)
-        .filter(|&id| id >= FIRST_PROBLEM_ID_PHASE_2)
-        .rev()
-        .collect();
-
-    let results: Vec<_> = run_ids
-        .into_par_iter()
-        .map(|id| {
-            let problem = io::read_problem(id);
-
-            let init_duration = Duration::from_secs(60);
-            let duration = Duration::from_secs(60 * 60);
-
-            info!("Starting problem {} with duration {:?}", id, duration);
-            let (placements, iterations) = annealing(
-                &problem,
-                &if use_wo_block {
-                    generate_without_block(&problem, init_duration, 1e5, 1e0)
-                } else {
-                    generate_random_placement(&problem)
-                },
-                duration,
-                1e5,
-                1e0,
-            );
-
-            let score = compute_score_fast(&problem, &placements);
-            let best_score = user_board[id as usize - 1].unwrap_or(0);
-            info!(
-                "id: {:>2} score: {:>14} iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
-                id,
-                score.separate_with_commas(),
-                iterations.separate_with_commas(),
-                best_score.separate_with_commas(),
-                if best_score > 0 {
-                    score as f64 * 100.0 / best_score as f64
-                } else {
-                    INFINITY
+    let run_ids = best_ids
+        .into_iter()
+        .filter(|&id| {
+            if let Some(min_id) = args.min_id {
+                if id < min_id {
+                    return false;
                 }
-            );
-            if score as f64 > best_score as f64 + 1e6 {
+            }
+            if let Some(max_id) = args.max_id {
+                if id > max_id {
+                    return false;
+                }
+            }
+            true
+        })
+        .take(args.top_n.unwrap_or(u32::MAX) as usize)
+        .collect::<Vec<_>>();
+
+    info!("Running for {} ids: {:?}", run_ids.len(), run_ids);
+
+    info!("Durations are {:?}", args.duration_mins);
+
+    for &duration_min in &args.duration_mins {
+        info!("Starting for duration {} min", duration_min);
+        let results: Vec<_> = run_ids
+            .clone()
+            .into_par_iter()
+            .map(|id| {
+                let problem = io::read_problem(id);
+
+                let duration = Duration::from_secs(duration_min * 60);
+                let init_duration = (duration / 60).max(Duration::from_secs(60).min(duration));
+
+                info!("Starting problem {} with duration {:?}", id, duration);
+                let (placements, iterations) = annealing(
+                    &problem,
+                    &if !args.disable_init {
+                        generate_without_block(&problem, init_duration, 1e5, 1e0)
+                    } else {
+                        generate_random_placement(&problem)
+                    },
+                    duration,
+                    1e5,
+                    1e0,
+                );
+
+                let score = compute_score_fast(&problem, &placements);
+                let best_score = user_board[id as usize - 1].unwrap_or(0);
                 info!(
-                    "Submitting problem {} with score {} ({}% increase)",
+                    "id: {:>2} score: {:>14} iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
                     id,
                     score.separate_with_commas(),
+                    iterations.separate_with_commas(),
+                    best_score.separate_with_commas(),
                     if best_score > 0 {
-                        (score as f64 / best_score as f64 * 100.0 - 100.0).round()
+                        score as f64 * 100.0 / best_score as f64
                     } else {
                         INFINITY
                     }
                 );
-                io::submit_placements(
-                    &token,
-                    problem.id,
-                    placements
-                        .iter()
-                        .cloned()
-                        .map(|(x, y)| (x as f64, y as f64))
-                        .collect::<Vec<_>>()
-                        .as_slice(),
-                )
-                .unwrap();
-            }
+                if score as f64 > best_score as f64 + 1e6 {
+                    info!(
+                        "Submitting problem {} with score {} ({}% increase)",
+                        id,
+                        score.separate_with_commas(),
+                        if best_score > 0 {
+                            (score as f64 / best_score as f64 * 100.0 - 100.0).round()
+                        } else {
+                            INFINITY
+                        }
+                    );
+                    io::submit_placements(
+                        &token,
+                        problem.id,
+                        placements
+                            .iter()
+                            .cloned()
+                            .map(|(x, y)| (x as f64, y as f64))
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                    )
+                    .unwrap();
+                }
 
-            ExecInfo {
-                id,
-                score,
-                iterations,
-                best_score,
-            }
-        })
-        .collect();
+                ExecInfo {
+                    id,
+                    score,
+                    iterations,
+                    best_score,
+                }
+            })
+            .collect();
 
-    info!("Showing all results");
+        info!("Showing all results");
 
-    for result in &results {
-        info!(
-            "id: {:>2} score: {:>14} iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
-            result.id,
-            result.score.separate_with_commas(),
-            result.iterations.separate_with_commas(),
-            result.best_score.separate_with_commas(),
-            if result.best_score > 0 {
-                result.score as f64 * 100.0 / result.best_score as f64
-            } else {
-                INFINITY
-            }
-        );
+        for result in &results {
+            info!(
+                "id: {:>2} score: {:>14} iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
+                result.id,
+                result.score.separate_with_commas(),
+                result.iterations.separate_with_commas(),
+                result.best_score.separate_with_commas(),
+                if result.best_score > 0 {
+                    result.score as f64 * 100.0 / result.best_score as f64
+                } else {
+                    INFINITY
+                }
+            );
+        }
+
+        let total_score = results.iter().map(|x| x.score).sum::<i64>();
+
+        info!("total_score: {}", total_score.separate_with_commas());
     }
-
-    let total_score = results.iter().map(|x| x.score).sum::<i64>();
-
-    dbg!(total_score.separate_with_commas());
 }

@@ -13,7 +13,7 @@ struct ProblemJson {
     stage_bottom_left: (f64, f64),
     musicians: Vec<f64>,
     attendees: Vec<AttendeeJson>,
-    pillars: Vec<PillarJson>
+    pillars: Vec<PillarJson>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -140,10 +140,7 @@ fn try_read_problem(id: u32) -> Result<Problem> {
             .iter()
             .map(|p| {
                 Ok(Pillar {
-                    center: (
-                        try_u32(p.center.0)?,
-                        try_u32(p.center.1)?,
-                    ),
+                    center: (try_u32(p.center.0)?, try_u32(p.center.1)?),
                     radius: try_u32(p.radius)?,
                 })
             })
@@ -165,6 +162,7 @@ struct Placement {
 #[derive(Debug, Serialize)]
 struct Submission {
     placements: Vec<Placement>,
+    volumes: Vec<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -173,11 +171,20 @@ struct PostBody {
     contents: String,
 }
 
-pub fn submit_placements(token: &str, id: u32, placements: &[(f64, f64)]) -> Result<()> {
+pub fn submit_placements(
+    token: &str,
+    id: u32,
+    placements: &[(f64, f64)],
+    volumes: &[bool],
+) -> Result<()> {
     let submission = Submission {
         placements: placements
             .iter()
             .map(|&(x, y)| Placement { x, y })
+            .collect(),
+        volumes: volumes
+            .iter()
+            .map(|&x| if x { 10.0 } else { 0.0 })
             .collect(),
     };
     let submission_str = serde_json::to_string(&submission).unwrap();

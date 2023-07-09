@@ -39,10 +39,15 @@ struct ScoreDiffCalculator {
     raw_score: Vec<i64>,
     bonus_factor: Vec<f64>,
     pillar_block_cache: HashMap<(u32, u32), BitVec>,
+    volume: Vec<bool>,
 }
 
 impl ScoreDiffCalculator {
-    fn new(problem: &io::Problem, placements: &[(u32, u32)]) -> ScoreDiffCalculator {
+    fn new(
+        problem: &io::Problem,
+        placements: &[(u32, u32)],
+        volume: &[bool],
+    ) -> ScoreDiffCalculator {
         let mut calculator = ScoreDiffCalculator {
             attendees: vec![vec![]; placements.len()],
             blocked_count: vec![vec![0; problem.attendees.len()]; placements.len()],
@@ -50,6 +55,7 @@ impl ScoreDiffCalculator {
             raw_score: vec![0; placements.len()],
             bonus_factor: vec![0.0; placements.len()],
             pillar_block_cache: HashMap::new(),
+            volume: volume.to_vec(),
         };
         for k in 0..placements.len() {
             calculator.place_musician(problem, k, placements[k]);
@@ -58,13 +64,30 @@ impl ScoreDiffCalculator {
     }
 
     fn compute_score(&self) -> i64 {
-        self.raw_score
-            .iter()
-            .zip(self.bonus_factor.iter())
-            .map(|(&raw_score, &bonus_factor)| {
-                (raw_score as f64 * (1.0 + bonus_factor)).ceil() as i64
-            })
-            .sum()
+        10i64
+            * self
+                .raw_score
+                .iter()
+                .zip(self.bonus_factor.iter())
+                .zip(self.volume.iter())
+                .map(|((&raw_score, &bonus_factor), &volume)| {
+                    if volume {
+                        (raw_score as f64 * (1.0 + bonus_factor)).ceil() as i64
+                    } else {
+                        0
+                    }
+                })
+                .sum::<i64>()
+    }
+
+    fn toggle_volume(&mut self, k: usize) -> i64 {
+        let score = (self.raw_score[k] as f64 * (1.0 + self.bonus_factor[k])).ceil() as i64;
+        self.volume[k] = !self.volume[k];
+        if self.volume[k] {
+            score
+        } else {
+            -score
+        }
     }
 
     // O(|A| + |M| * (the size of range))
@@ -323,8 +346,8 @@ struct ScoreInfo {
     pass_count: u32,
 }
 
-fn compute_score_fast(problem: &io::Problem, placements: &[Point]) -> i64 {
-    ScoreDiffCalculator::new(problem, placements).compute_score()
+fn compute_score_fast(problem: &io::Problem, placements: &[Point], volume: &[bool]) -> i64 {
+    ScoreDiffCalculator::new(problem, placements, volume).compute_score()
 }
 
 fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
@@ -543,14 +566,16 @@ fn generate_without_block(
 fn annealing(
     problem: &io::Problem,
     init: &[Point],
+    init_volumes: &[bool],
     duration: Duration,
     start_temp: f64,
     end_temp: f64,
-) -> (Vec<Point>, u64) {
+) -> (Vec<Point>, Vec<bool>, u64) {
     let mut rng = rand::thread_rng();
 
     let mut placements = init.to_vec();
-    let mut score_calculator = ScoreDiffCalculator::new(problem, &placements);
+    let mut volumes = init_volumes.to_vec();
+    let mut score_calculator = ScoreDiffCalculator::new(problem, &placements, &volumes);
     let mut score = score_calculator.compute_score();
 
     let start = std::time::Instant::now();
@@ -568,7 +593,27 @@ fn annealing(
 
         let temp = start_temp + (end_temp - start_temp) * time;
 
-        let update_type = rng.gen_range(0..3);
+        let update_type = rng.gen_range(0..4);
+
+        if update_type == 3 {
+            let k = rng.gen_range(0..problem.musicians.len());
+
+            volumes[k] = !volumes[k];
+            let score_diff = score_calculator.toggle_volume(k);
+
+            let prob = (score_diff as f64 / temp).exp().clamp(0.0, 1.0);
+
+            if rng.gen_bool(prob) {
+                score += score_diff;
+            } else {
+                volumes[k] = !volumes[k];
+                score_calculator.toggle_volume(k);
+            }
+
+            iterations += 1;
+            continue;
+        }
+
         let mut undo: Box<dyn FnMut(&mut Vec<(u32, u32)>, &mut ScoreDiffCalculator)> =
             if update_type == 0 {
                 let k = rng.gen_range(0..problem.musicians.len());
@@ -632,7 +677,7 @@ fn annealing(
                     c.remove_musician(problem, k);
                     c.place_musician(problem, k, p[k]);
                 })
-            } else {
+            } else if update_type == 2 {
                 let (i, j) = {
                     let v = (0..problem.musicians.len()).choose_multiple(&mut rng, 2);
                     (v[0], v[1])
@@ -655,6 +700,8 @@ fn annealing(
                     c.place_musician(problem, i, p[i]);
                     c.place_musician(problem, j, p[j]);
                 })
+            } else {
+                unreachable!()
             };
 
         let new_score = score_calculator.compute_score();
@@ -684,7 +731,7 @@ fn annealing(
     // dbg!(compute_score(problem, &placements).score);
     // dbg!(update_counter);
 
-    (placements, iterations)
+    (placements, volumes, iterations)
 }
 
 struct ExecInfo {
@@ -720,7 +767,10 @@ fn main() {
     info!("arguments: {:?}", args);
 
     let threads = match args.threads {
-        Some(threads) => threads,
+        Some(threads) => {
+            info!("using {} threads", threads);
+            threads
+        }
         None => {
             let physical_cpus = num_cpus::get_physical();
             info!("-t not specified, using {} threads", physical_cpus);
@@ -728,7 +778,6 @@ fn main() {
         }
     };
 
-    info!("Using {} threads", threads);
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build_global()
@@ -773,24 +822,26 @@ fn main() {
                 let init_duration = (duration / 60).max(Duration::from_secs(60).min(duration));
 
                 info!("Starting problem {} with duration {:?}", id, duration);
-                let (placements, iterations) = annealing(
+                let (placements, volumes, iterations) = annealing(
                     &problem,
                     &if !args.disable_init {
                         generate_without_block(&problem, init_duration, 1e5, 1e0)
                     } else {
                         generate_random_placement(&problem)
                     },
+                    &vec![true; problem.musicians.len()],
                     duration,
                     1e5,
                     1e0,
                 );
 
-                let score = compute_score_fast(&problem, &placements);
+                let score = compute_score_fast(&problem, &placements, &volumes);
                 let best_score = user_board[id as usize - 1].unwrap_or(0);
                 info!(
-                    "id: {:>2} score: {:>14} iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
+                    "id: {:>2} score: {:>14} volume: {:3.0}% iter: {:>10} best: {:>14} ratio_to_best: {:4}%",
                     id,
                     score.separate_with_commas(),
+                    volumes.iter().filter(|&&x| x).count() as f64 * 100.0 / volumes.len() as f64,
                     iterations.separate_with_commas(),
                     best_score.separate_with_commas(),
                     if best_score > 0 {
@@ -819,6 +870,7 @@ fn main() {
                             .map(|(x, y)| (x as f64, y as f64))
                             .collect::<Vec<_>>()
                             .as_slice(),
+                        &volumes,
                     )
                     .unwrap();
                 }

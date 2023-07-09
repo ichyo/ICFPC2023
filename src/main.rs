@@ -324,49 +324,6 @@ fn compute_score_fast(problem: &io::Problem, placements: &[Point]) -> i64 {
     ScoreDiffCalculator::new(problem, placements).compute_score()
 }
 
-fn compute_score(problem: &io::Problem, placements: &[Point]) -> ScoreInfo {
-    let mut score = 0;
-
-    let mut block_count = 0;
-    let mut pass_count = 0;
-    let mut blocked_score = 0;
-
-    for a in &problem.attendees {
-        for k in 0..problem.musicians.len() {
-            let seg = (
-                geo::Point::new(placements[k].0 as f64, placements[k].1 as f64),
-                geo::Point::new(a.x as f64, a.y as f64),
-            );
-
-            let inst_type = problem.musicians[k];
-            let taste_value = a.tastes[inst_type as usize] as i64;
-            let d2 = dist_sq(placements[k], (a.x, a.y)) as i64;
-            let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
-
-            if (0..problem.musicians.len()).any(|j| {
-                j != k
-                    && geo::dist_sq_segment_point(
-                        seg,
-                        geo::Point::new(placements[j].0 as f64, placements[j].1 as f64),
-                    ) <= (BLOCK_RADIUS as f64).powi(2) + 2e-4
-            }) {
-                block_count += 1;
-                blocked_score += add_score;
-                continue;
-            }
-            pass_count += 1;
-
-            score += add_score;
-        }
-    }
-    ScoreInfo {
-        score,
-        blocked_score,
-        block_count,
-        pass_count,
-    }
-}
-
 fn generate_random_placement(problem: &io::Problem) -> Vec<Point> {
     let x_list = (problem.stage_left() + PLACEMENT_RADIUS
         ..=problem.stage_right() - PLACEMENT_RADIUS)

@@ -14,8 +14,8 @@ use thousands::Separable;
 
 type Point = (u32, u32);
 
-fn within_or_equal(p: Point, q: Point, d: u32) -> bool {
-    dist_sq(p, q) <= (d as u64).pow(2)
+fn within(p: Point, q: Point, d: u32) -> bool {
+    dist_sq(p, q) < (d as u64).pow(2)
 }
 
 fn dist_sq(p: Point, q: Point) -> u64 {
@@ -23,6 +23,7 @@ fn dist_sq(p: Point, q: Point) -> u64 {
 }
 
 const MAX_PROBLEM_ID: u32 = 90;
+const FIRST_PROBLEM_ID_PHASE_2: u32 = 56;
 
 const BLOCK_RADIUS: u32 = 5;
 const PLACEMENT_RADIUS: u32 = 10;
@@ -360,7 +361,7 @@ fn generate_random_placement_from_list(
 
             if placements
                 .iter()
-                .any(|&p| within_or_equal(p, (x, y), PLACEMENT_RADIUS))
+                .any(|&p| within(p, (x, y), PLACEMENT_RADIUS))
             {
                 retry += 1;
                 assert!(retry <= 1000);
@@ -388,21 +389,23 @@ fn generate_without_block(
     let unit = (1..=100)
         .into_iter()
         .filter(|u| {
-            let cache_size = sample_by_unit(
+            let w = sample_by_unit(
                 problem.stage_left() + PLACEMENT_RADIUS,
                 problem.stage_right() - PLACEMENT_RADIUS,
                 *u,
             )
-            .len() as u64
-                * sample_by_unit(
-                    problem.stage_bottom() + PLACEMENT_RADIUS,
-                    problem.stage_top() - PLACEMENT_RADIUS,
-                    *u,
-                )
-                .len() as u64
-                * (problem.max_inst() + 1) as u64;
+            .len() as u64;
+            let h = sample_by_unit(
+                problem.stage_bottom() + PLACEMENT_RADIUS,
+                problem.stage_top() - PLACEMENT_RADIUS,
+                *u,
+            )
+            .len() as u64;
+            let cache_size = h * w * (problem.max_inst() + 1) as u64;
             let combinations = cache_size * problem.attendees.len() as u64;
-            cache_size <= 1e8 as u64 && combinations <= 1e10 as u64
+            let combinations2 =
+                w * h * problem.attendees.len() as u64 * problem.pillars.len() as u64;
+            cache_size <= 1e8 as u64 && combinations.max(combinations2) <= 1e10 as u64
         })
         .next()
         .unwrap();
@@ -421,15 +424,26 @@ fn generate_without_block(
     let mut score_cache = HashMap::new();
     for &y in &y_list {
         for &x in &x_list {
-            for inst_type in 0..=problem.max_inst() {
-                let mut score = 0;
-                for a in &problem.attendees {
-                    let taste_value = a.tastes[inst_type as usize] as i64;
-                    let d2 = dist_sq((x, y), (a.x, a.y)) as i64;
-                    let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
-                    score += add_score;
+            let p = geo::Point::new(x as f64, y as f64);
+            for a in &problem.attendees {
+                let q = geo::Point::new(a.x as f64, a.y as f64);
+                let seg = (p, q);
+
+                let blocked = problem.pillars.iter().any(|p| {
+                    let center = geo::Point::new(p.center.0 as f64, p.center.1 as f64);
+                    geo::dist_sq_segment_point(seg, center) < (p.radius as f64).powi(2)
+                });
+
+                if blocked {
+                    continue;
                 }
-                score_cache.insert(((x, y), inst_type), score);
+
+                let d2 = dist_sq((x, y), (a.x, a.y)) as i64;
+                for inst_type in 0..=problem.max_inst() {
+                    let taste_value = a.tastes[inst_type as usize] as i64;
+                    let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
+                    *score_cache.entry(((x, y), inst_type)).or_default() += add_score;
+                }
             }
         }
     }
@@ -438,7 +452,20 @@ fn generate_without_block(
     for k in 0..placements.len() {
         let inst_type = problem.musicians[k];
         let mut score = 0;
+        let p = geo::Point::new(placements[k].0 as f64, placements[k].1 as f64);
         for a in &problem.attendees {
+            let q = geo::Point::new(a.x as f64, a.y as f64);
+            let seg = (p, q);
+
+            let blocked = problem.pillars.iter().any(|p| {
+                let center = geo::Point::new(p.center.0 as f64, p.center.1 as f64);
+                geo::dist_sq_segment_point(seg, center) < (p.radius as f64).powi(2)
+            });
+
+            if blocked {
+                continue;
+            }
+
             let taste_value = a.tastes[inst_type as usize] as i64;
             let d2 = dist_sq(placements[k], (a.x, a.y)) as i64;
             let add_score = (SCORE_FACTOR * taste_value + d2 - 1) / d2;
@@ -465,7 +492,7 @@ fn generate_without_block(
         let ny = *y_list.choose(&mut rng).unwrap();
 
         if (0..problem.musicians.len())
-            .any(|j| j != k && within_or_equal((nx, ny), placements[j], PLACEMENT_RADIUS))
+            .any(|j| j != k && within((nx, ny), placements[j], PLACEMENT_RADIUS))
         {
             continue;
         }
@@ -510,6 +537,8 @@ fn annealing(
 
     let start = std::time::Instant::now();
     let mut iterations = 0u64;
+
+    //let mut update_counter: HashMap<i32, u64> = HashMap::new();
     loop {
         let time = start.elapsed().as_secs_f64() / duration.as_secs_f64();
         if time >= 1.0 {
@@ -535,7 +564,7 @@ fn annealing(
                 // }
 
                 if (0..problem.musicians.len())
-                    .any(|j| j != k && within_or_equal((x, y), placements[j], PLACEMENT_RADIUS))
+                    .any(|j| j != k && within((x, y), placements[j], PLACEMENT_RADIUS))
                 {
                     continue;
                 }
@@ -566,7 +595,7 @@ fn annealing(
                 }
 
                 if (0..problem.musicians.len())
-                    .any(|j| j != k && within_or_equal((x, y), placements[j], PLACEMENT_RADIUS))
+                    .any(|j| j != k && within((x, y), placements[j], PLACEMENT_RADIUS))
                 {
                     continue;
                 }
@@ -619,6 +648,7 @@ fn annealing(
             //     new_score - score
             // );
             score = new_score;
+            //*update_counter.entry(update_type).or_default() += 1;
         } else {
             undo(&mut placements, &mut score_calculator);
         }
@@ -629,13 +659,14 @@ fn annealing(
     // dbg!(score_calculator.score);
     // dbg!(compute_score_fast(problem, &placements));
     // dbg!(compute_score(problem, &placements).score);
+    // dbg!(update_counter);
 
     (placements, iterations)
 }
 
 fn main() {
     rayon::ThreadPoolBuilder::new()
-        .num_threads(22)
+        .num_threads(24)
         .build_global()
         .unwrap();
 
@@ -646,23 +677,30 @@ fn main() {
     let mut best_ids: Vec<u32> = (1..=MAX_PROBLEM_ID).collect();
     best_ids.sort_by_key(|id| std::cmp::Reverse(user_board[*id as usize - 1].unwrap_or(0)));
 
+    let use_wo_block = true;
+
     let results: Vec<_> = (1..=MAX_PROBLEM_ID)
         .into_par_iter()
-        .filter(|&id| {
-            if user_board[id as usize - 1].is_some() {
-                return false;
-            }
-            true
-        })
+        // .filter(|&id| id >= FIRST_PROBLEM_ID_PHASE_2)
         .map(|id| {
             let problem = io::read_problem(id);
+
+            let init_duration = Duration::from_secs(60);
+            let duration = Duration::from_secs(60 * 30);
+
+            eprintln!("Starting problem {} with duration {:?}", id, duration);
             let (placements, iterations) = annealing(
                 &problem,
-                &generate_random_placement(&problem),
-                Duration::from_secs(60 * 60),
+                &if use_wo_block {
+                    generate_without_block(&problem, init_duration, 1e5, 1e0)
+                } else {
+                    generate_random_placement(&problem)
+                },
+                duration,
                 1e5,
                 1e0,
             );
+
             let score = compute_score_fast(&problem, &placements);
             let best_score = user_board[id as usize - 1].unwrap_or(0);
             eprintln!(

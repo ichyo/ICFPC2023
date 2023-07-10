@@ -593,7 +593,7 @@ fn annealing(
 
         let temp = start_temp + (end_temp - start_temp) * time;
 
-        let update_type = rng.gen_range(0..4);
+        let update_type = rng.gen_range(0..3);
 
         if update_type == 3 {
             let k = rng.gen_range(0..problem.musicians.len());

@@ -83,11 +83,7 @@ impl ScoreDiffCalculator {
     fn toggle_volume(&mut self, k: usize) -> i64 {
         let score = (self.raw_score[k] as f64 * (1.0 + self.bonus_factor[k])).ceil() as i64;
         self.volume[k] = !self.volume[k];
-        if self.volume[k] {
-            score
-        } else {
-            -score
-        }
+        10 * if self.volume[k] { score } else { -score }
     }
 
     // O(|A| + |M| * (the size of range))
@@ -593,7 +589,7 @@ fn annealing(
 
         let temp = start_temp + (end_temp - start_temp) * time;
 
-        let update_type = rng.gen_range(0..3);
+        let update_type = rng.gen_range(0..4);
 
         if update_type == 3 {
             let k = rng.gen_range(0..problem.musicians.len());
@@ -761,10 +757,86 @@ struct Args {
     disable_init: bool,
 }
 
+fn resubmit() {
+    let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
+    let user_board = io::get_userboard(&token).unwrap();
+
+    for id in 1..=90 {
+        let problem = io::read_problem(id);
+        if let Some(placements) = io::get_pre_best_solution(&token, id).unwrap() {
+            let mut volumes = vec![true; placements.len()];
+
+            let mut calculator = ScoreDiffCalculator::new(&problem, &placements, &volumes);
+
+            let orig = calculator.compute_score();
+
+            for i in 0..placements.len() {
+                let prev = calculator.compute_score();
+                let diff = calculator.toggle_volume(i);
+                assert_eq!(prev + diff, calculator.compute_score());
+                if diff <= 0 {
+                    calculator.toggle_volume(i);
+                } else {
+                    volumes[i] = !volumes[i];
+                }
+            }
+
+            let volume_ratio = volumes.iter().filter(|&&x| x).count() as f64 / volumes.len() as f64;
+
+            let score = calculator.compute_score();
+            let best_score = user_board[id as usize - 1].unwrap_or(0);
+            info!(
+                "id: {:>2} orig: {:>14} score: {:>14} best: {:>14} volume: {:4.1}% improve: {:5.1}% ratio_to_best: {:4}%",
+                id,
+                orig.separate_with_commas(),
+                score.separate_with_commas(),
+                best_score.separate_with_commas(),
+                volume_ratio * 100.0,
+                score as f64 * 100.0 / orig as f64,
+                if best_score > 0 {
+                    score as f64 * 100.0 / best_score as f64
+                } else {
+                    INFINITY
+                }
+            );
+
+            if score > best_score {
+                info!(
+                    "Submitting problem {} with score {} ({}% increase)",
+                    id,
+                    score.separate_with_commas(),
+                    if best_score > 0 {
+                        (score as f64 / best_score as f64 * 100.0 - 100.0).round()
+                    } else {
+                        INFINITY
+                    }
+                );
+                if let Err(e) = io::submit_placements(
+                    &token,
+                    problem.id,
+                    placements
+                        .iter()
+                        .cloned()
+                        .map(|(x, y)| (x as f64, y as f64))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    &volumes,
+                ) {
+                    error!("Failed to submit {}: {}", problem.id, e);
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let token = std::env::var("ICFPC_TOKEN").expect("ICFPC_TOKEN not set");
+
+    // TODO: remove
+    // resubmit();
+    // return;
 
     let args = Args::parse();
 

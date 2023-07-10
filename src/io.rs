@@ -1,6 +1,7 @@
 use std::{fs::File, io::Write};
 
 use anyhow::Result;
+use log::info;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -228,4 +229,59 @@ pub fn get_userboard(token: &str) -> Result<Vec<Option<i64>>> {
         .map(|x| x.as_f64().map(|x| x as i64))
         .collect();
     Ok(problems)
+}
+
+pub fn get_pre_best_solution(token: &str, id: u32) -> Result<Option<Vec<(u32, u32)>>> {
+    let response = reqwest::blocking::Client::new()
+        .get(format!(
+            "https://api.icfpcontest.com/submissions?offset=0&limit=1000&problem_id={}",
+            id
+        ))
+        .bearer_auth(token)
+        .send()?;
+    let json: Value = response.json()?;
+    let data = json["Success"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| {
+            x["score"]
+                .as_object()
+                .map(|x| x.contains_key("Success"))
+                .unwrap_or(false)
+        })
+        .filter(|x| x["submitted_at"].as_str().unwrap() < "2023-07-09T12:59:50.352656515Z")
+        .max_by_key(|x| x["score"]["Success"].as_f64().unwrap() as i64);
+    if let Some(data) = data {
+        let id = data["_id"].as_str().unwrap();
+        let url = format!(
+            "https://api.icfpcontest.com/submission?submission_id={}",
+            id
+        );
+        let response = reqwest::blocking::Client::new()
+            .get(url)
+            .bearer_auth(token)
+            .send()?;
+        let json: Value = response.json()?;
+        let contens_str = json["Success"].as_object().unwrap()["contents"]
+            .as_str()
+            .unwrap();
+        let contents: Value = serde_json::from_str(contens_str)?;
+        assert!(!contents.as_object().unwrap().contains_key("volumes"));
+        let placements = contents["placements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                Ok((
+                    try_u32(x["x"].as_f64().unwrap())?,
+                    try_u32(x["y"].as_f64().unwrap())?,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Some(placements))
+    } else {
+        info!("no best for {}", id);
+        Ok(None)
+    }
 }

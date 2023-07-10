@@ -593,7 +593,7 @@ fn annealing(
 
         let temp = start_temp + (end_temp - start_temp) * time;
 
-        let update_type = rng.gen_range(0..3);
+        let update_type = rng.gen_range(0..4);
 
         if update_type == 3 {
             let k = rng.gen_range(0..problem.musicians.len());
@@ -825,13 +825,13 @@ fn main() {
                 let (placements, mut volumes, iterations) = annealing(
                     &problem,
                     &if !args.disable_init {
-                        generate_without_block(&problem, init_duration, 1e5, 1e0)
+                        generate_without_block(&problem, init_duration, 1e6, 1e0)
                     } else {
                         generate_random_placement(&problem)
                     },
                     &vec![true; problem.musicians.len()],
                     duration,
-                    1e6,
+                    1e7,
                     1e0,
                 );
 

@@ -687,6 +687,10 @@ fn annealing(
                     continue;
                 }
 
+                if !volumes[i] && !volumes[j] {
+                    continue;
+                }
+
                 placements.swap(i, j);
                 score_calculator.remove_musician(problem, i);
                 score_calculator.remove_musician(problem, j);
@@ -831,7 +835,7 @@ fn main() {
                     },
                     &vec![true; problem.musicians.len()],
                     duration,
-                    1e7,
+                    3e6,
                     1e0,
                 );
 

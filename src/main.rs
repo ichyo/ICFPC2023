@@ -907,7 +907,7 @@ fn main() {
                     },
                     &vec![true; problem.musicians.len()],
                     duration,
-                    1e7,
+                    1e5,
                     1e0,
                 );
 

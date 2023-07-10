@@ -593,7 +593,7 @@ fn annealing(
 
         let temp = start_temp + (end_temp - start_temp) * time;
 
-        let update_type = rng.gen_range(0..4);
+        let update_type = rng.gen_range(0..3);
 
         if update_type == 3 {
             let k = rng.gen_range(0..problem.musicians.len());
@@ -822,7 +822,7 @@ fn main() {
                 let init_duration = (duration / 60).max(Duration::from_secs(60).min(duration));
 
                 info!("Starting problem {} with duration {:?}", id, duration);
-                let (placements, volumes, iterations) = annealing(
+                let (placements, mut volumes, iterations) = annealing(
                     &problem,
                     &if !args.disable_init {
                         generate_without_block(&problem, init_duration, 1e5, 1e0)
@@ -831,9 +831,19 @@ fn main() {
                     },
                     &vec![true; problem.musicians.len()],
                     duration,
-                    1e5,
+                    1e6,
                     1e0,
                 );
+
+                let mut calculator = ScoreDiffCalculator::new(&problem, &placements, &volumes);
+                for i in 0..problem.musicians.len() {
+                    let diff = calculator.toggle_volume(i);
+                    if diff < 0 {
+                        calculator.toggle_volume(i);
+                    } else {
+                        volumes[i] = !volumes[i];
+                    }
+                }
 
                 let score = compute_score_fast(&problem, &placements, &volumes);
                 let best_score = user_board[id as usize - 1].unwrap_or(0);
